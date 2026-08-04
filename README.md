@@ -38,6 +38,31 @@ CSV download button. No command-line flags, no GUI popups.
 
 ## Deploying it (not just localhost)
 
+### Render.com free tier -- quick start
+
+1. Push this repo to GitHub (`git remote add origin <your-repo-url>`,
+   `git branch -M main`, `git push -u origin main`).
+2. On [render.com](https://render.com): **New +** -> **Blueprint** ->
+   connect the repo. Render reads `render.yaml` and configures
+   everything automatically (free plan, `requirements-render.txt`,
+   gunicorn start command) -- just click **Apply**.
+   (No Blueprint option? **New +** -> **Web Service** instead, then set
+   Build Command to `pip install -r requirements-render.txt` and Start
+   Command to `gunicorn server:app --bind 0.0.0.0:$PORT --workers 1
+   --threads 4 --timeout 600`, plan **Free**.)
+3. Wait for the build (~3-5 min) -- you get a public URL like
+   `https://rat-gait-analysis.onrender.com`.
+
+**Free tier limits to know going in:** the service sleeps after 15 min
+with no traffic (next request takes ~30-50s to wake it back up); RAM is
+capped at 512MB, so very large videos may process slowly or fail --
+watch for that and upgrade to the $7/mo Starter plan (more RAM, less
+sleep) if it becomes a problem; and storage is ephemeral -- uploaded
+videos and generated results are lost on redeploy/restart, so download
+anything you need (the CSV, the plots) before that happens. None of
+this is a code problem, it's what "free" costs on any platform for an
+app that does real video processing.
+
 This is a plain Flask app (`server.py` + `templates/` + `static/` +
 `requirements.txt` + `Procfile`), so it deploys the normal way:
 
