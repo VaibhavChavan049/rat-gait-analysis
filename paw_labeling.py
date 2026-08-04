@@ -232,21 +232,47 @@ def _paw_ellipse_length_width_angle(
     return major_cm, minor_cm, angle_deg
 
 
-def build_paw_tracks(
+def build_paw_tracks_and_visuals(
     video_path,
     meta: VideoMeta,
     calibration: Calibration,
     orientation: Orientation,
-) -> dict[str, list[PawFrameSample]]:
+    capture_visuals: bool = False,
+    max_clip_frames: int = 60,
+    clip_scale: int = 2,
+):
     """
-    Run detection + labeling across every frame of the video, returning
-    one continuous time series per paw label (LF/RF/LH/RH). Frames where
-    a given paw isn't in contact with the belt get present=False samples
-    with zero area, so downstream metrics can compute stance/swing phases
-    and dA/dt cleanly over a uniform timeline.
+    Run detection + labeling across every frame of the video ONCE,
+    building the per-paw time series (LF/RF/LH/RH) that every metric is
+    computed from. Frames where a given paw isn't in contact with the
+    belt get present=False samples with zero area, so downstream metrics
+    can compute stance/swing phases and dA/dt cleanly over a uniform
+    timeline.
+
+    When capture_visuals=True, ALSO collects (in the same pass) an
+    annotated snapshot frame and a short annotated clip's worth of
+    frames for the web UI's paw-overlay preview. This is deliberately
+    one combined pass rather than three separate ones (tracks, then a
+    snapshot scan, then a clip scan) -- decoding + running detection on
+    every frame is the expensive part of this pipeline, and tripling
+    that work triples wall-clock time and CPU for no benefit. On a
+    resource-constrained deploy target (e.g. a free-tier host with a
+    fraction of a CPU and a hard request timeout) that tripling is the
+    difference between finishing in time and the request getting killed.
+
+    Returns just `tracks` when capture_visuals=False (matches
+    build_paw_tracks's old signature). Otherwise returns
+    (tracks, snapshot_frame_bgr_or_None, clip_frames_rgb_list).
     """
     tracks: dict[str, list[PawFrameSample]] = {label: [] for label in LABELS}
     body_tracker: BodyCenterTracker | None = None
+
+    snapshot_frame, snapshot_count = None, -1
+    clip_frames_rgb = []
+    draw_labeled_blobs = None
+    if capture_visuals:
+        from paw_overlay import _draw_labeled_blobs  # deferred: avoids a module import cycle
+        draw_labeled_blobs = _draw_labeled_blobs
 
     for frame_idx, frame in iter_frames(video_path):
         frame_h, frame_w = frame.shape[:2]
@@ -286,9 +312,36 @@ def build_paw_tracks(
                 paw_angle_deg=angle_deg,
             ))
 
+        if capture_visuals:
+            if len(labeled) > snapshot_count:
+                snapshot_frame = draw_labeled_blobs(frame, labeled)
+                snapshot_count = len(labeled)
+            if len(clip_frames_rgb) < max_clip_frames:
+                annotated = draw_labeled_blobs(frame, labeled)
+                if clip_scale != 1:
+                    annotated = cv2.resize(
+                        annotated, (frame_w * clip_scale, frame_h * clip_scale),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                clip_frames_rgb.append(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
+
     if config.VERBOSE:
         for label in LABELS:
             n_present = sum(1 for s in tracks[label] if s.present)
             print(f"[paw_labeling] {label}: {n_present}/{len(tracks[label])} frames in contact")
+
+    if capture_visuals:
+        return tracks, snapshot_frame, clip_frames_rgb
+    return tracks
+
+
+def build_paw_tracks(
+    video_path,
+    meta: VideoMeta,
+    calibration: Calibration,
+    orientation: Orientation,
+) -> dict[str, list[PawFrameSample]]:
+    """Metrics-only convenience wrapper (used by main.py's CLI path)."""
+    return build_paw_tracks_and_visuals(video_path, meta, calibration, orientation, capture_visuals=False)
 
     return tracks

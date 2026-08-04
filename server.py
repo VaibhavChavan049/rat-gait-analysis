@@ -22,8 +22,8 @@ import digigait_reference
 from calibration import Calibration, auto_calibrate
 from metrics import build_summary_dataframe, compute_all_metrics
 from orientation import Orientation
-from paw_labeling import build_paw_tracks
-from paw_overlay import generate_annotated_clip, generate_annotated_snapshot
+from paw_labeling import build_paw_tracks_and_visuals
+from paw_overlay import save_clip, save_snapshot
 from plotting import generate_all_plots
 from video_io import discover_all_videos, parse_belt_speed_from_filename, read_first_frame, read_video_metadata
 
@@ -183,7 +183,14 @@ def _run_pipeline(body: dict):
             "message": "No reference/session default orientation available -- pick a nose direction.",
         }), 409
 
-    tracks = build_paw_tracks(video_path, meta, calibration, orientation)
+    # Single pass over the video: builds the metrics tracks AND collects
+    # the snapshot/clip frames at the same time (see that function's
+    # docstring -- this used to be 3 separate full-video decode+detect
+    # passes, which is what was pushing wall-clock time past Render's
+    # free-tier request timeout on real videos).
+    tracks, snapshot_frame, clip_frames_rgb = build_paw_tracks_and_visuals(
+        video_path, meta, calibration, orientation, capture_visuals=True,
+    )
     all_metrics = compute_all_metrics(tracks, meta, orientation)
     plot_paths = generate_all_plots(all_metrics, meta, config.PLOTS_DIR)
     summary_df = build_summary_dataframe(all_metrics, meta)
@@ -194,10 +201,10 @@ def _run_pipeline(body: dict):
     all_metrics["area_time_series"].to_csv(config.CSV_DIR / f"{stem}_area_time_series.csv", index=False)
 
     snapshot_path = config.PLOTS_DIR / f"{stem}_paw_overlay_snapshot.jpg"
-    generate_annotated_snapshot(video_path, orientation, snapshot_path)
+    save_snapshot(snapshot_frame, snapshot_path)
 
     clip_path = config.PLOTS_DIR / f"{stem}_paw_overlay.gif"
-    generate_annotated_clip(video_path, orientation, clip_path)
+    save_clip(clip_frames_rgb, clip_path)
 
     comparison_rows = None
     if digigait_meta is not None and not digigait_meta.is_session_default and digigait_meta.images_dir is not None:

@@ -44,9 +44,38 @@ def _draw_labeled_blobs(frame_bgr: np.ndarray, labeled_blobs: dict) -> np.ndarra
     return annotated
 
 
+def save_snapshot(frame_bgr, output_path, scale: int = 4):
+    """Write an already-annotated frame (see paw_labeling.build_paw_tracks_and_visuals) to disk as a JPEG."""
+    if frame_bgr is None:
+        return None
+    h, w = frame_bgr.shape[:2]
+    resized = cv2.resize(frame_bgr, (w * scale, h * scale), interpolation=cv2.INTER_NEAREST)
+    cv2.imwrite(str(output_path), resized)
+    return output_path
+
+
+def save_clip(frames_rgb: list, output_path, frame_duration_ms: int = 40):
+    """Write already-annotated RGB frames (see paw_labeling.build_paw_tracks_and_visuals) to disk as a GIF."""
+    if not frames_rgb:
+        return None
+    pil_frames = [Image.fromarray(f) for f in frames_rgb]
+    pil_frames[0].save(
+        output_path, format="GIF", save_all=True, append_images=pil_frames[1:],
+        duration=frame_duration_ms, loop=0,
+    )
+    return output_path
+
+
 def generate_annotated_clip(video_path, orientation: Orientation, output_path,
                              max_frames: int = 150, scale: int = 3, frame_duration_ms: int = 40):
     """
+    Standalone version: decodes and re-runs detection on the video
+    itself, separately from track-building. server.py does NOT use this
+    -- it uses paw_labeling.build_paw_tracks_and_visuals(capture_visuals
+    =True) + save_clip() so detection only runs once per video instead
+    of three times (see that function's docstring for why that matters
+    on a resource-constrained server). Kept here for standalone/CLI use.
+
     Write a short annotated GIF: fitted ellipse + label for every
     detected paw, on every frame (up to max_frames). AOI-cropped source
     frames are tiny, so `scale` upsamples the output for readability.
