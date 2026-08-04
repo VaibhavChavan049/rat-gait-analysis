@@ -1,0 +1,13 @@
+# Render "Blueprint" config -- lets Render auto-configure the service
+# when you connect this repo (New -> Blueprint), instead of filling in
+# the build/start commands by hand.
+services:
+  - type: web
+    name: rat-gait-analysis
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements-render.txt"
+    startCommand: "gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 600"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+output/plots/*.png
+output/csv/*.gif
+output/csv/*.csv
+output/plots/*.gif
+output/plots/*.jpg
+videos/*.mp4
+videos/*.avi
+videos/*.mov
+uploads/*.mp4
+uploads/*.avi
+uploads/*.mov
