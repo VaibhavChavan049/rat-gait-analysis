@@ -35,7 +35,15 @@ from orientation import Orientation
 from paw_labeling import build_paw_tracks_and_visuals
 from paw_overlay import save_clip, save_snapshot
 from plotting import generate_all_plots
-from video_io import discover_all_videos, parse_belt_speed_from_filename, read_first_frame, read_video_metadata
+from video_io import (
+    discover_all_videos, parse_belt_speed_from_filename, read_first_frame,
+    read_video_metadata, run_with_timeout,
+)
+
+# How long a single cv2 video-open/read operation gets before we give up
+# on it and return a clear error instead of hanging the request (see
+# video_io.run_with_timeout's docstring for why this exists).
+VIDEO_READ_TIMEOUT_S = 30
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
@@ -134,7 +142,10 @@ def too_large(_):
 def api_preview(video_name):
     """First frame of a video, as a PNG, for the orientation/calibration picker."""
     video_path = _video_path_by_name(video_name)
-    frame = read_first_frame(video_path)
+    try:
+        frame = run_with_timeout(read_first_frame, VIDEO_READ_TIMEOUT_S, video_path)
+    except TimeoutError as exc:
+        return jsonify({"error": str(exc)}), 504
     out_path = config.OUTPUT_DIR / "plots" / f"_preview_{video_path.stem}.png"
     cv2.imwrite(str(out_path), frame)
     return send_from_directory(out_path.parent, out_path.name)
@@ -200,8 +211,8 @@ def _run_pipeline(body: dict) -> dict:
     digigait_meta = _resolve_metadata(video_path)
 
     try:
-        meta = read_video_metadata(
-            video_path, interactive=False,
+        meta = run_with_timeout(
+            read_video_metadata, VIDEO_READ_TIMEOUT_S, video_path, interactive=False,
             belt_speed_override=float(belt_speed_override) if belt_speed_override else None,
         )
     except ValueError:
@@ -209,10 +220,15 @@ def _run_pipeline(body: dict) -> dict:
             "belt_speed_required",
             "Belt speed isn't in the filename. Enter it (cm/s) and run again.",
         )
+    except TimeoutError as exc:
+        raise PipelineInputNeeded("video_unreadable", str(exc))
     if digigait_meta is not None and digigait_meta.belt_speed_cms is not None:
         meta.belt_speed_cms = digigait_meta.belt_speed_cms
 
-    first_frame = read_first_frame(video_path)
+    try:
+        first_frame = run_with_timeout(read_first_frame, VIDEO_READ_TIMEOUT_S, video_path)
+    except TimeoutError as exc:
+        raise PipelineInputNeeded("video_unreadable", str(exc))
 
     if digigait_meta is not None and digigait_meta.calibration is not None:
         calibration = digigait_meta.calibration

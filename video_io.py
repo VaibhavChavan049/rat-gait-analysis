@@ -7,12 +7,39 @@ Responsible for two things the pipeline must never hardcode:
 """
 
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 
 import config
+
+
+def run_with_timeout(fn, timeout_s: float, *args, **kwargs):
+    """
+    Run fn(*args, **kwargs) with a wall-clock timeout. Some video files
+    (an unusual/older codec cv2's bundled FFmpeg doesn't fully support,
+    seen on real uploads) can make cv2.VideoCapture.read() hang
+    indefinitely instead of raising -- with no exception to catch, that
+    silently ties up a whole request (and, worse, blocks the thread
+    handling it) until the platform's own gateway times out and returns
+    a bare 502. This turns that into a fast, clear TimeoutError instead.
+
+    Note: Python can't forcibly kill a stuck native (C-extension) call,
+    so a truly hung cv2 call keeps running in the background thread
+    after this returns -- but the caller (and the HTTP response) is no
+    longer blocked on it, which is what actually matters here.
+    """
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_s)
+        except FutureTimeoutError:
+            raise TimeoutError(
+                f"Timed out after {timeout_s}s waiting on {fn.__name__}. The video file may use "
+                f"a codec this server's OpenCV build doesn't support."
+            )
 
 
 # ---------------------------------------------------------------------------
