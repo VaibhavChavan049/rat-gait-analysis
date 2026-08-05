@@ -21,11 +21,15 @@ async function fetchJson(url, options) {
   const contentType = res.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     const text = await res.text();
-    throw new Error(`Server returned a non-JSON response (HTTP ${res.status}). ${text.slice(0, 200)}`);
+    const err = new Error(`Server returned a non-JSON response (HTTP ${res.status}). ${text.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
   }
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    const err = new Error(data.message || data.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
@@ -43,7 +47,7 @@ async function loadVideos() {
 function renderVideoList() {
   videoListEl.innerHTML = "";
   if (videos.length === 0) {
-    videoListEl.innerHTML = '<div class="video-item">No videos yet -- upload one above.</div>';
+    videoListEl.innerHTML = '<div class="video-item">No videos yet. Upload one above.</div>';
     return;
   }
   videos.forEach((v) => {
@@ -62,15 +66,23 @@ function renderVideoList() {
 function resetCalibCanvas() {
   calibClickPoints = [];
   tapeWidthPx = null;
+  const ctx = previewCanvas.getContext("2d");
   if (previewImageObj) {
-    const ctx = previewCanvas.getContext("2d");
     ctx.drawImage(previewImageObj, 0, 0);
+  } else {
+    // No frame loaded (yet, or it failed) -- clear the canvas rather
+    // than leaving whatever was drawn on it before (this used to leave
+    // a stale image, or a scribble of old click marks, on screen).
+    ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
   }
-  calibReadout.textContent = "Click two points on the frame above";
+  calibReadout.textContent = previewImageObj
+    ? "Click two points on the frame above"
+    : "Waiting for the frame to load...";
 }
 
 function onPreviewCanvasClick(evt) {
   if (calibrationBlock.classList.contains("hidden")) return;
+  if (!previewImageObj) return; // nothing to measure against yet
   const rect = previewCanvas.getBoundingClientRect();
   const scaleX = previewCanvas.width / rect.width;
   const scaleY = previewCanvas.height / rect.height;
@@ -126,6 +138,7 @@ async function selectVideo(v) {
   statusLine.textContent = "";
   calibClickPoints = [];
   tapeWidthPx = null;
+  previewImageObj = null;
 
   const needsPreview = v.needs_orientation || v.needs_calibration;
   if (needsPreview) {
@@ -133,7 +146,15 @@ async function selectVideo(v) {
     try {
       await loadPreviewInto(v.name);
     } catch (e) {
-      statusLine.textContent = "Could not load preview frame.";
+      // Most likely cause: this video was uploaded before the last
+      // server restart/redeploy and no longer exists (free-tier hosts
+      // don't keep uploaded files across restarts) -- refresh the list
+      // so the stale entry disappears instead of leaving a broken UI.
+      previewCanvas.getContext("2d").clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+      statusLine.textContent = "Could not load this video's first frame. It may no longer be on the server; refreshing the video list, please re-upload it.";
+      goBtn.disabled = true;
+      await loadVideos();
+      return;
     }
   } else {
     previewBlock.classList.add("hidden");
@@ -148,11 +169,11 @@ async function selectVideo(v) {
   // needed if the filename doesn't carry it -- harmless to show either way.
 
   if (v.has_own_reference) {
-    statusLine.textContent = "Reference data found -- calibration, belt speed, and orientation load automatically.";
+    statusLine.textContent = "Reference data found. Calibration, belt speed, and orientation load automatically.";
   } else if (v.auto_calibrated) {
     statusLine.textContent = "Using calibration/orientation shared with other videos in this session folder.";
   } else {
-    statusLine.textContent = "No reference data for this video -- set nose direction and/or calibration above.";
+    statusLine.textContent = "No reference data for this video. Set nose direction and/or calibration above.";
   }
 }
 
@@ -214,7 +235,7 @@ async function pollJob(jobId) {
     const elapsedSec = Math.round((Date.now() - startTime) / 1000);
 
     if (Date.now() - startTime > MAX_WAIT_MS) {
-      statusLine.textContent = `Gave up waiting after ${elapsedSec}s -- the server may be overloaded. Try again, or try a smaller video.`;
+      statusLine.textContent = `Gave up waiting after ${elapsedSec}s. The server may be overloaded, try again or try a smaller video.`;
       return;
     }
 
@@ -268,7 +289,16 @@ goBtn.onclick = async () => {
     });
     await pollJob(started.job_id);
   } catch (err) {
-    statusLine.textContent = "Error: " + err.message;
+    if (err.status === 404) {
+      // This video was uploaded before a server restart/redeploy and no
+      // longer exists there (free-tier hosts don't keep uploaded files
+      // across restarts) -- refresh the list so it's obvious it's gone.
+      statusLine.textContent = "This video is no longer on the server (it may have been cleared by a restart). Please re-upload it.";
+      selectedVideo = null;
+      await loadVideos();
+    } else {
+      statusLine.textContent = "Error: " + err.message;
+    }
   } finally {
     goBtn.disabled = false;
     spinner.classList.add("hidden");

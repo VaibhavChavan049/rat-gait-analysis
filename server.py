@@ -76,7 +76,7 @@ def _resolve_metadata(video_path: Path) -> digigait_reference.DigiGaitMetadata |
 
 @app.route("/")
 def index():
-    folder_label = str(config.VIDEO_DIR) if config.VIDEO_DIR else "(none on this server -- upload videos below)"
+    folder_label = str(config.VIDEO_DIR) if config.VIDEO_DIR else "No local video folder on this server. Upload a video below to get started."
     return render_template("index.html", folder_name=folder_label)
 
 
@@ -127,7 +127,7 @@ def api_upload():
 @app.errorhandler(413)
 def too_large(_):
     limit_mb = config.MAX_UPLOAD_BYTES // (1024 * 1024)
-    return jsonify({"error": f"File too large -- limit is {limit_mb} MB."}), 413
+    return jsonify({"error": f"File too large (limit: {limit_mb} MB)."}), 413
 
 
 @app.route("/api/preview/<video_name>")
@@ -207,7 +207,7 @@ def _run_pipeline(body: dict) -> dict:
     except ValueError:
         raise PipelineInputNeeded(
             "belt_speed_required",
-            "Belt speed isn't in the filename -- enter it (cm/s) and run again.",
+            "Belt speed isn't in the filename. Enter it (cm/s) and run again.",
         )
     if digigait_meta is not None and digigait_meta.belt_speed_cms is not None:
         meta.belt_speed_cms = digigait_meta.belt_speed_cms
@@ -242,7 +242,7 @@ def _run_pipeline(body: dict) -> dict:
     else:
         raise PipelineInputNeeded(
             "orientation_required",
-            "No reference/session default orientation available -- pick a nose direction.",
+            "No orientation data available for this video. Pick a nose direction and run again.",
         )
 
     # Single pass over the video: builds the metrics tracks AND collects

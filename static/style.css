@@ -78,6 +78,14 @@ body {
 .radio-label.active { color: var(--text-light); }
 .radio-label.disabled { color: #7fae95; }
 
+.hint-text {
+  font-size: 0.8rem;
+  color: var(--cream);
+  opacity: 0.85;
+  line-height: 1.4;
+  margin: 0 0 8px 0;
+}
+
 .preview-img {
   width: 100%;
   border-radius: 4px;
