@@ -232,14 +232,24 @@ def _paw_ellipse_length_width_angle(
     return major_cm, minor_cm, angle_deg
 
 
+# Cap the annotated snapshot/clip's long edge at this many pixels,
+# regardless of the source video's actual resolution. Uploaded videos
+# can be far higher-resolution than the small AOI-cropped reference
+# clips this pipeline was first tested against; without a hard cap,
+# a large source video's annotated frames (kept in memory for the GIF)
+# can by themselves exceed a free-tier host's entire RAM budget and
+# crash the whole process (not just time out) -- a plain try/except
+# can't catch that since the OS kills the process outright.
+_VISUAL_MAX_DIM_PX = 640
+
+
 def build_paw_tracks_and_visuals(
     video_path,
     meta: VideoMeta,
     calibration: Calibration,
     orientation: Orientation,
     capture_visuals: bool = False,
-    max_clip_frames: int = 60,
-    clip_scale: int = 2,
+    max_clip_frames: int = 45,
 ):
     """
     Run detection + labeling across every frame of the video ONCE,
@@ -262,15 +272,21 @@ def build_paw_tracks_and_visuals(
 
     Returns just `tracks` when capture_visuals=False (matches
     build_paw_tracks's old signature). Otherwise returns
-    (tracks, snapshot_frame_bgr_or_None, clip_frames_rgb_list).
+    (tracks, snapshot_frame_bgr_or_None, clip_pil_frames_list) -- the
+    clip frames come back as already-built PIL Images (not raw numpy
+    arrays) since paw_overlay.save_clip needs PIL Images anyway;
+    building them here instead of converting a second time afterward
+    avoids briefly holding both representations in memory at once.
     """
     tracks: dict[str, list[PawFrameSample]] = {label: [] for label in LABELS}
     body_tracker: BodyCenterTracker | None = None
 
     snapshot_frame, snapshot_count = None, -1
-    clip_frames_rgb = []
+    visual_scale = None  # computed once we know the source frame size
+    clip_pil_frames = []
     draw_labeled_blobs = None
     if capture_visuals:
+        from PIL import Image
         from paw_overlay import _draw_labeled_blobs  # deferred: avoids a module import cycle
         draw_labeled_blobs = _draw_labeled_blobs
 
@@ -313,17 +329,29 @@ def build_paw_tracks_and_visuals(
             ))
 
         if capture_visuals:
+            if visual_scale is None:
+                # Bound the annotated output's long edge to
+                # _VISUAL_MAX_DIM_PX regardless of source resolution:
+                # upscale small AOI-cropped frames so labels are
+                # readable, but never blow past the cap for a
+                # large/high-res upload.
+                long_edge = max(frame_w, frame_h)
+                # No lower floor: a large source must shrink as much as
+                # it takes to stay under the cap. Only cap the UPSCALE
+                # side (small AOI crops don't need to blow up past 3x).
+                visual_scale = min(_VISUAL_MAX_DIM_PX / long_edge, 3.0)
+                target_w = max(1, round(frame_w * visual_scale))
+                target_h = max(1, round(frame_h * visual_scale))
+                interp = cv2.INTER_NEAREST if visual_scale >= 1 else cv2.INTER_AREA
+
             if len(labeled) > snapshot_count:
-                snapshot_frame = draw_labeled_blobs(frame, labeled)
-                snapshot_count = len(labeled)
-            if len(clip_frames_rgb) < max_clip_frames:
                 annotated = draw_labeled_blobs(frame, labeled)
-                if clip_scale != 1:
-                    annotated = cv2.resize(
-                        annotated, (frame_w * clip_scale, frame_h * clip_scale),
-                        interpolation=cv2.INTER_NEAREST,
-                    )
-                clip_frames_rgb.append(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
+                snapshot_frame = cv2.resize(annotated, (target_w, target_h), interpolation=interp)
+                snapshot_count = len(labeled)
+            if len(clip_pil_frames) < max_clip_frames:
+                annotated = draw_labeled_blobs(frame, labeled)
+                resized = cv2.resize(annotated, (target_w, target_h), interpolation=interp)
+                clip_pil_frames.append(Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)))
 
     if config.VERBOSE:
         for label in LABELS:
@@ -331,7 +359,7 @@ def build_paw_tracks_and_visuals(
             print(f"[paw_labeling] {label}: {n_present}/{len(tracks[label])} frames in contact")
 
     if capture_visuals:
-        return tracks, snapshot_frame, clip_frames_rgb
+        return tracks, snapshot_frame, clip_pil_frames
     return tracks
 
 

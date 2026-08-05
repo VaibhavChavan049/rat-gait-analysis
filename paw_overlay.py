@@ -44,21 +44,30 @@ def _draw_labeled_blobs(frame_bgr: np.ndarray, labeled_blobs: dict) -> np.ndarra
     return annotated
 
 
-def save_snapshot(frame_bgr, output_path, scale: int = 4):
-    """Write an already-annotated frame (see paw_labeling.build_paw_tracks_and_visuals) to disk as a JPEG."""
+def save_snapshot(frame_bgr, output_path):
+    """
+    Write an already-annotated, already-sized frame (see
+    paw_labeling.build_paw_tracks_and_visuals, which bounds every
+    visual's output size up front) to disk as a JPEG. No resizing here
+    -- keeping that in one place avoids the output size depending on
+    which code path produced the frame.
+    """
     if frame_bgr is None:
         return None
-    h, w = frame_bgr.shape[:2]
-    resized = cv2.resize(frame_bgr, (w * scale, h * scale), interpolation=cv2.INTER_NEAREST)
-    cv2.imwrite(str(output_path), resized)
+    cv2.imwrite(str(output_path), frame_bgr)
     return output_path
 
 
-def save_clip(frames_rgb: list, output_path, frame_duration_ms: int = 40):
-    """Write already-annotated RGB frames (see paw_labeling.build_paw_tracks_and_visuals) to disk as a GIF."""
-    if not frames_rgb:
+def save_clip(pil_frames: list, output_path, frame_duration_ms: int = 40):
+    """
+    Write already-annotated, already-sized PIL Images (see
+    paw_labeling.build_paw_tracks_and_visuals) to disk as a GIF. Frames
+    arrive as PIL Images already -- building them during capture rather
+    than converting a whole raw-numpy-array list afterward avoids
+    briefly holding both representations in memory at once.
+    """
+    if not pil_frames:
         return None
-    pil_frames = [Image.fromarray(f) for f in frames_rgb]
     pil_frames[0].save(
         output_path, format="GIF", save_all=True, append_images=pil_frames[1:],
         duration=frame_duration_ms, loop=0,
