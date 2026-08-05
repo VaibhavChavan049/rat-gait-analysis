@@ -4,7 +4,7 @@
 services:
   - type: web
     name: rat-gait-analysis
-    runtime: python
+    env: python
     plan: free
     buildCommand: "pip install -r requirements-render.txt"
     startCommand: "gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 600"
