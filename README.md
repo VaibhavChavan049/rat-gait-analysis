@@ -1,3 +1,13 @@
+---
+title: Rat Gait Analysis
+emoji: 🐀
+colorFrom: green
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Rat Gait / Momentum Analysis Pipeline
 
 Python replacement/extension for the legacy MATLAB DigiGait (Mouse
