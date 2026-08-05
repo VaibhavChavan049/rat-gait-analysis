@@ -141,7 +141,10 @@ def too_large(_):
 @app.route("/api/preview/<video_name>")
 def api_preview(video_name):
     """First frame of a video, as a PNG, for the orientation/calibration picker."""
-    video_path = _video_path_by_name(video_name)
+    try:
+        video_path = _video_path_by_name(video_name)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
     try:
         frame = run_with_timeout(read_first_frame, VIDEO_READ_TIMEOUT_S, video_path)
     except TimeoutError as exc:

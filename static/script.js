@@ -116,19 +116,43 @@ function onPreviewCanvasClick(evt) {
 document.getElementById("calib-reset-btn").onclick = resetCalibCanvas;
 previewCanvas.onclick = onPreviewCanvasClick;
 
-function loadPreviewInto(videoName) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      previewImageObj = img;
-      previewCanvas.width = img.naturalWidth;
-      previewCanvas.height = img.naturalHeight;
-      previewCanvas.getContext("2d").drawImage(img, 0, 0);
-      resolve();
-    };
-    img.onerror = reject;
-    img.src = `/api/preview/${encodeURIComponent(videoName)}?t=${Date.now()}`;
-  });
+async function loadPreviewInto(videoName) {
+  // Fetch (not a plain <img src=...>) so a failure carries the real
+  // HTTP status and the server's actual error message -- an <img>'s
+  // onerror event fires the same way for "file missing" as it does for
+  // "this codec isn't supported here", which used to make every preview
+  // failure show the same misleading "may no longer be on the server"
+  // message even when the file was right there, just unreadable.
+  const res = await fetch(`/api/preview/${encodeURIComponent(videoName)}?t=${Date.now()}`);
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    if ((res.headers.get("content-type") || "").includes("application/json")) {
+      const data = await res.json();
+      message = data.message || data.error || message;
+    }
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
+  }
+
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        previewImageObj = img;
+        previewCanvas.width = img.naturalWidth;
+        previewCanvas.height = img.naturalHeight;
+        previewCanvas.getContext("2d").drawImage(img, 0, 0);
+        resolve();
+      };
+      img.onerror = () => reject(new Error("Could not decode the preview image"));
+      img.src = objectUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 async function selectVideo(v) {
@@ -146,14 +170,20 @@ async function selectVideo(v) {
     try {
       await loadPreviewInto(v.name);
     } catch (e) {
-      // Most likely cause: this video was uploaded before the last
-      // server restart/redeploy and no longer exists (free-tier hosts
-      // don't keep uploaded files across restarts) -- refresh the list
-      // so the stale entry disappears instead of leaving a broken UI.
       previewCanvas.getContext("2d").clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-      statusLine.textContent = "Could not load this video's first frame. It may no longer be on the server; refreshing the video list, please re-upload it.";
       goBtn.disabled = true;
-      await loadVideos();
+      if (e.status === 404) {
+        // File genuinely gone (free-tier storage resets on restart) --
+        // refresh the list so the stale entry disappears.
+        statusLine.textContent = "This video is no longer on the server (storage resets on restart/redeploy). Refreshing the video list; please re-upload it.";
+        await loadVideos();
+      } else if (e.status === 504) {
+        // The file exists but this server's OpenCV/FFmpeg build can't
+        // read it -- re-uploading the same file won't help.
+        statusLine.textContent = "This video's format could not be read on the server (timed out) -- it likely uses a codec that isn't supported here. Try a different export of this video, or a different video.";
+      } else {
+        statusLine.textContent = `Could not load this video's first frame (${e.message}).`;
+      }
       return;
     }
   } else {
