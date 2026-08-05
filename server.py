@@ -8,9 +8,19 @@ locally with:
     ./.venv/bin/python server.py
 
 then open http://localhost:5050 in a browser.
+
+Analysis runs in a background thread, not inline in the request (see
+api_run / _job_worker below): on a free-tier host, real video processing
+can take longer than the platform's own request timeout, which kills
+the HTTP connection with a 502 no matter how generous gunicorn's own
+--timeout is set to. Returning immediately with a job id and having the
+browser poll for completion sidesteps that entirely -- no single HTTP
+request is ever held open for the length of the analysis.
 """
 
+import threading
 import traceback
+import uuid
 from pathlib import Path
 
 import cv2
@@ -29,6 +39,22 @@ from video_io import discover_all_videos, parse_belt_speed_from_filename, read_f
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
+
+# In-memory job store: job_id -> {"status": "running"|"done"|"input_needed"|"error", ...}
+# Fine for a single-worker, personal-use deployment (server.py runs
+# with --workers 1); a multi-worker/multi-process deploy would need a
+# shared store (Redis etc.) instead since each worker has its own memory.
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+class PipelineInputNeeded(Exception):
+    """Raised when the pipeline needs more info from the user (nose
+    direction, calibration, belt speed) before it can run."""
+    def __init__(self, error_code: str, message: str):
+        self.error_code = error_code
+        self.message = message
+        super().__init__(message)
 
 
 def _video_path_by_name(name: str) -> Path:
@@ -119,16 +145,52 @@ def outputs(filename):
     return send_from_directory(config.OUTPUT_DIR, filename)
 
 
+# ---------------------------------------------------------------------------
+# Analysis job: kicked off in a background thread, polled for completion
+# ---------------------------------------------------------------------------
+
 @app.route("/api/run", methods=["POST"])
 def api_run():
+    body = request.get_json(force=True)
+    video_name = body.get("video")
     try:
-        return _run_pipeline(request.get_json(force=True))
+        _video_path_by_name(video_name)  # fail fast, synchronously, on an obviously bad request
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "running"}
+
+    thread = threading.Thread(target=_job_worker, args=(job_id, body), daemon=True)
+    thread.start()
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/api/run/<job_id>")
+def api_run_status(job_id):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        return jsonify({"error": "unknown job_id"}), 404
+    return jsonify(job)
+
+
+def _job_worker(job_id: str, body: dict):
+    try:
+        result = _run_pipeline(body)
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "done", "result": result}
+    except PipelineInputNeeded as exc:
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "input_needed", "error": exc.error_code, "message": exc.message}
     except Exception as exc:
         traceback.print_exc()
-        return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 500
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
 
-def _run_pipeline(body: dict):
+def _run_pipeline(body: dict) -> dict:
     video_name = body.get("video")
     nose_direction = body.get("nose_direction")
     belt_speed_override = body.get("belt_speed")
@@ -143,10 +205,10 @@ def _run_pipeline(body: dict):
             belt_speed_override=float(belt_speed_override) if belt_speed_override else None,
         )
     except ValueError:
-        return jsonify({
-            "error": "belt_speed_required",
-            "message": "Belt speed isn't in the filename -- enter it (cm/s) and run again.",
-        }), 409
+        raise PipelineInputNeeded(
+            "belt_speed_required",
+            "Belt speed isn't in the filename -- enter it (cm/s) and run again.",
+        )
     if digigait_meta is not None and digigait_meta.belt_speed_cms is not None:
         meta.belt_speed_cms = digigait_meta.belt_speed_cms
 
@@ -166,28 +228,27 @@ def _run_pipeline(body: dict):
                 tape_width_px=float(tape_width_px), method="manual_web",
             )
         if calibration is None:
-            return jsonify({
-                "error": "calibration_required",
-                "message": "Could not auto-detect the calibration tape in this video, and no "
-                           "reference/session default is available. Click two points across the "
-                           "tape width on the preview image, then run again.",
-            }), 409
+            raise PipelineInputNeeded(
+                "calibration_required",
+                "Could not auto-detect the calibration tape in this video, and no "
+                "reference/session default is available. Click two points across the "
+                "tape width on the preview image, then run again.",
+            )
 
     if digigait_meta is not None and digigait_meta.orientation is not None:
         orientation = digigait_meta.orientation
     elif nose_direction:
         orientation = Orientation(nose_direction=nose_direction)
     else:
-        return jsonify({
-            "error": "orientation_required",
-            "message": "No reference/session default orientation available -- pick a nose direction.",
-        }), 409
+        raise PipelineInputNeeded(
+            "orientation_required",
+            "No reference/session default orientation available -- pick a nose direction.",
+        )
 
     # Single pass over the video: builds the metrics tracks AND collects
     # the snapshot/clip frames at the same time (see that function's
     # docstring -- this used to be 3 separate full-video decode+detect
-    # passes, which is what was pushing wall-clock time past Render's
-    # free-tier request timeout on real videos).
+    # passes, which multiplied CPU time for no reason).
     tracks, snapshot_frame, clip_frames_rgb = build_paw_tracks_and_visuals(
         video_path, meta, calibration, orientation, capture_visuals=True,
     )
@@ -217,7 +278,7 @@ def _run_pipeline(body: dict):
     def _out_url(p: Path) -> str:
         return f"/outputs/{Path(p).relative_to(config.OUTPUT_DIR).as_posix()}"
 
-    return jsonify({
+    return {
         "video": video_name,
         "fps": round(meta.fps, 2),
         "belt_speed_cms": meta.belt_speed_cms,
@@ -233,7 +294,7 @@ def _run_pipeline(body: dict):
         "summary_rows": summary_df.round(4).to_dict(orient="records"),
         "summary_csv_url": _out_url(summary_csv_path),
         "comparison_rows": comparison_rows,
-    })
+    }
 
 
 if __name__ == "__main__":

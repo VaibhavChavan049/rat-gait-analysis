@@ -175,11 +175,78 @@ function renderTable(rows) {
   return html;
 }
 
+function renderResults(data) {
+  document.getElementById("results-info").innerHTML =
+    `<strong>${data.video}</strong> &nbsp;|&nbsp; fps: ${data.fps} &nbsp;|&nbsp; ` +
+    `belt speed: ${data.belt_speed_cms} cm/s &nbsp;|&nbsp; ` +
+    `calibration: ${data.cm_per_pixel_x} cm/px (x), ${data.cm_per_pixel_y} cm/px (y) &nbsp;|&nbsp; ` +
+    (data.used_reference_data ? "using DigiGait reference data" :
+      data.used_session_default ? "using session-shared calibration/orientation" : "manual setup");
+
+  document.getElementById("snapshot-img").src = data.snapshot_url + `?t=${Date.now()}`;
+  document.getElementById("clip-img").src = data.clip_url + `?t=${Date.now()}`;
+  document.getElementById("gait-signals-img").src = data.gait_signals_url + `?t=${Date.now()}`;
+  document.getElementById("ensemble-paws-img").src = data.ensemble_paws_url + `?t=${Date.now()}`;
+  document.getElementById("posture-img").src = data.posture_url + `?t=${Date.now()}`;
+
+  document.getElementById("summary-table-wrap").innerHTML = renderTable(data.summary_rows);
+  document.getElementById("download-csv").href = data.summary_csv_url;
+
+  const comparisonPanel = document.getElementById("comparison-panel");
+  if (data.comparison_rows && data.comparison_rows.length > 0) {
+    document.getElementById("comparison-table-wrap").innerHTML = renderTable(data.comparison_rows);
+    comparisonPanel.classList.remove("hidden");
+  } else {
+    comparisonPanel.classList.add("hidden");
+  }
+
+  resultsEl.classList.remove("hidden");
+  resultsEl.scrollIntoView({ behavior: "smooth" });
+}
+
+const POLL_INTERVAL_MS = 2500;
+const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes -- real videos on a free-tier host can be slow
+
+async function pollJob(jobId) {
+  const startTime = Date.now();
+
+  while (true) {
+    const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+
+    if (Date.now() - startTime > MAX_WAIT_MS) {
+      statusLine.textContent = `Gave up waiting after ${elapsedSec}s -- the server may be overloaded. Try again, or try a smaller video.`;
+      return;
+    }
+
+    let job;
+    try {
+      job = await fetchJson(`/api/run/${jobId}`);
+    } catch (err) {
+      statusLine.textContent = "Error checking status: " + err.message;
+      return;
+    }
+
+    if (job.status === "running") {
+      statusLine.textContent = `Running analysis... ${elapsedSec}s elapsed (this can take a while on a free-tier server)`;
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      continue;
+    }
+    if (job.status === "done") {
+      renderResults(job.result);
+      statusLine.textContent = `Done (${elapsedSec}s).`;
+      return;
+    }
+    // "input_needed" or "error"
+    statusLine.textContent = "Error: " + (job.message || job.error || "unknown error");
+    return;
+  }
+}
+
 goBtn.onclick = async () => {
   if (!selectedVideo) return;
   goBtn.disabled = true;
   spinner.classList.remove("hidden");
-  statusLine.textContent = "Running analysis -- this can take a minute or two...";
+  statusLine.textContent = "Starting analysis...";
   resultsEl.classList.add("hidden");
 
   const payload = { video: selectedVideo };
@@ -194,39 +261,12 @@ goBtn.onclick = async () => {
   }
 
   try {
-    const data = await fetchJson("/api/run", {
+    const started = await fetchJson("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
-    document.getElementById("results-info").innerHTML =
-      `<strong>${data.video}</strong> &nbsp;|&nbsp; fps: ${data.fps} &nbsp;|&nbsp; ` +
-      `belt speed: ${data.belt_speed_cms} cm/s &nbsp;|&nbsp; ` +
-      `calibration: ${data.cm_per_pixel_x} cm/px (x), ${data.cm_per_pixel_y} cm/px (y) &nbsp;|&nbsp; ` +
-      (data.used_reference_data ? "using DigiGait reference data" :
-        data.used_session_default ? "using session-shared calibration/orientation" : "manual setup");
-
-    document.getElementById("snapshot-img").src = data.snapshot_url + `?t=${Date.now()}`;
-    document.getElementById("clip-img").src = data.clip_url + `?t=${Date.now()}`;
-    document.getElementById("gait-signals-img").src = data.gait_signals_url + `?t=${Date.now()}`;
-    document.getElementById("ensemble-paws-img").src = data.ensemble_paws_url + `?t=${Date.now()}`;
-    document.getElementById("posture-img").src = data.posture_url + `?t=${Date.now()}`;
-
-    document.getElementById("summary-table-wrap").innerHTML = renderTable(data.summary_rows);
-    document.getElementById("download-csv").href = data.summary_csv_url;
-
-    const comparisonPanel = document.getElementById("comparison-panel");
-    if (data.comparison_rows && data.comparison_rows.length > 0) {
-      document.getElementById("comparison-table-wrap").innerHTML = renderTable(data.comparison_rows);
-      comparisonPanel.classList.remove("hidden");
-    } else {
-      comparisonPanel.classList.add("hidden");
-    }
-
-    resultsEl.classList.remove("hidden");
-    statusLine.textContent = "Done.";
-    resultsEl.scrollIntoView({ behavior: "smooth" });
+    await pollJob(started.job_id);
   } catch (err) {
     statusLine.textContent = "Error: " + err.message;
   } finally {
