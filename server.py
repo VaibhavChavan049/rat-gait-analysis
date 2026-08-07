@@ -18,6 +18,7 @@ browser poll for completion sidesteps that entirely -- no single HTTP
 request is ever held open for the length of the analysis.
 """
 
+import math
 import threading
 import traceback
 import uuid
@@ -28,6 +29,27 @@ from flask import Flask, jsonify, request, render_template, send_from_directory
 from werkzeug.utils import secure_filename
 
 import config
+
+
+def _json_safe(obj):
+    """
+    Recursively replace NaN/Infinity with None. Several metrics are
+    legitimately undefined for some paws (e.g. DigiGait's own reference
+    StanceWidth is NaN for RF/RH in this dataset -- it's simply not
+    computed for those limbs), and pandas represents "no value" as
+    float('nan'). Python's json module happily writes that out as the
+    literal token NaN, which is NOT valid JSON -- browsers' JSON.parse
+    correctly rejects it, which was breaking the frontend with
+    "Unexpected token 'N'... is not valid JSON" on any result containing
+    one. None serializes to JSON `null`, which every client understands.
+    """
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
 import digigait_reference
 from calibration import Calibration, auto_calibrate
 from metrics import build_summary_dataframe, compute_all_metrics
@@ -297,7 +319,7 @@ def _run_pipeline(body: dict) -> dict:
     def _out_url(p: Path) -> str:
         return f"/outputs/{Path(p).relative_to(config.OUTPUT_DIR).as_posix()}"
 
-    return {
+    return _json_safe({
         "video": video_name,
         "fps": round(meta.fps, 2),
         "belt_speed_cms": meta.belt_speed_cms,
@@ -313,7 +335,7 @@ def _run_pipeline(body: dict) -> dict:
         "summary_rows": summary_df.round(4).to_dict(orient="records"),
         "summary_csv_url": _out_url(summary_csv_path),
         "comparison_rows": comparison_rows,
-    }
+    })
 
 
 if __name__ == "__main__":
