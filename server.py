@@ -124,6 +124,12 @@ def api_videos():
             "auto_calibrated": meta is not None,
             "needs_orientation": meta is None or meta.orientation is None,
             "needs_calibration": meta is None or meta.calibration is None,
+            # Detected direction, if any -- the UI pre-selects this in the
+            # Nose Direction dropdown (which is always shown/editable) so
+            # you can see what will be used and change it if it's wrong.
+            "detected_nose_direction": (
+                meta.orientation.nose_direction if meta is not None and meta.orientation is not None else None
+            ),
         })
     return jsonify({
         "folder": str(config.VIDEO_DIR) if config.VIDEO_DIR else None,
@@ -276,10 +282,14 @@ def _run_pipeline(body: dict) -> dict:
                 "tape width on the preview image, then run again.",
             )
 
-    if digigait_meta is not None and digigait_meta.orientation is not None:
-        orientation = digigait_meta.orientation
-    elif nose_direction:
+    # An explicit selection from the UI always wins -- the Nose Direction
+    # dropdown is shown (pre-filled with the detected value when there is
+    # one) for every video, specifically so a detected value can be
+    # overridden if it's wrong, not just supplied when missing.
+    if nose_direction:
         orientation = Orientation(nose_direction=nose_direction)
+    elif digigait_meta is not None and digigait_meta.orientation is not None:
+        orientation = digigait_meta.orientation
     else:
         raise PipelineInputNeeded(
             "orientation_required",

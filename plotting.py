@@ -48,7 +48,7 @@ def plot_dynamic_gait_signals(all_metrics: dict, meta: VideoMeta, save_path):
     df = all_metrics["area_time_series"]
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 7), facecolor=BG)
-    fig.suptitle(f"Dynamic Gait Signals -- {meta.path.name}", color="white", fontsize=13)
+    fig.suptitle(f"Dynamic Gait Signals: {meta.path.name}", color="white", fontsize=13)
 
     for ax, label in zip(axes.flat, PAW_ORDER):
         _style_axes(ax)
@@ -73,7 +73,7 @@ def plot_ensemble_paws(all_metrics: dict, meta: VideoMeta, save_path):
     dadt_summary = all_metrics["dadt_summary"]
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), facecolor=BG)
-    fig.suptitle(f"Ensemble Paws -- {meta.path.name}", color="white", fontsize=13)
+    fig.suptitle(f"Ensemble Paws: {meta.path.name}", color="white", fontsize=13)
 
     pairs = [("Fore", ["LF", "RF"]), ("Hind", ["LH", "RH"])]
     for ax, (pair_name, labels) in zip(axes, pairs):
@@ -121,7 +121,7 @@ def plot_posture(all_metrics: dict, meta: VideoMeta, save_path):
     fig, (ax_plot, ax_text) = plt.subplots(
         1, 2, figsize=(12, 6), facecolor=BG, gridspec_kw={"width_ratios": [1, 1.15]}
     )
-    fig.suptitle(f"Posture Plot -- {meta.path.name}", color="white", fontsize=13)
+    fig.suptitle(f"Posture Plot: {meta.path.name}", color="white", fontsize=13)
     _style_axes(ax_plot)
     ax_plot.set_xlabel("X (cm)")
     ax_plot.set_ylabel("Y (cm)")

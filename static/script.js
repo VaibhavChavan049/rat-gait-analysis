@@ -164,33 +164,34 @@ async function selectVideo(v) {
   tapeWidthPx = null;
   previewImageObj = null;
 
-  const needsPreview = v.needs_orientation || v.needs_calibration;
-  if (needsPreview) {
-    previewBlock.classList.remove("hidden");
-    try {
-      await loadPreviewInto(v.name);
-    } catch (e) {
-      previewCanvas.getContext("2d").clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-      goBtn.disabled = true;
-      if (e.status === 404) {
-        // File genuinely gone (free-tier storage resets on restart) --
-        // refresh the list so the stale entry disappears.
-        statusLine.textContent = "This video is no longer on the server (storage resets on restart/redeploy). Refreshing the video list; please re-upload it.";
-        await loadVideos();
-      } else if (e.status === 504) {
-        // The file exists but this server's OpenCV/FFmpeg build can't
-        // read it -- re-uploading the same file won't help.
-        statusLine.textContent = "This video's format could not be read on the server (timed out) -- it likely uses a codec that isn't supported here. Try a different export of this video, or a different video.";
-      } else {
-        statusLine.textContent = `Could not load this video's first frame (${e.message}).`;
-      }
-      return;
+  // Preview + Nose Direction are always shown (not just when a video has
+  // no detected orientation): even a correctly auto-detected direction
+  // can be wrong for an unusual video, so it needs to stay visible and
+  // changeable, not just appear when something's missing.
+  previewBlock.classList.remove("hidden");
+  try {
+    await loadPreviewInto(v.name);
+  } catch (e) {
+    previewCanvas.getContext("2d").clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    goBtn.disabled = true;
+    if (e.status === 404) {
+      // File genuinely gone (free-tier storage resets on restart) --
+      // refresh the list so the stale entry disappears.
+      statusLine.textContent = "This video is no longer on the server (storage resets on restart/redeploy). Refreshing the video list; please re-upload it.";
+      await loadVideos();
+    } else if (e.status === 504) {
+      // The file exists but this server's OpenCV/FFmpeg build can't
+      // read it -- re-uploading the same file won't help.
+      statusLine.textContent = "This video's format could not be read on the server (timed out) -- it likely uses a codec that isn't supported here. Try a different export of this video, or a different video.";
+    } else {
+      statusLine.textContent = `Could not load this video's first frame (${e.message}).`;
     }
-  } else {
-    previewBlock.classList.add("hidden");
+    return;
   }
 
-  orientationBlock.classList.toggle("hidden", !v.needs_orientation);
+  orientationBlock.classList.remove("hidden");
+  document.getElementById("nose-direction-select").value = v.detected_nose_direction || "up";
+
   calibrationBlock.classList.toggle("hidden", !v.needs_calibration);
   if (v.needs_calibration) resetCalibCanvas();
 
